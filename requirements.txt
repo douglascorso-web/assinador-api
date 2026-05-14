@@ -1,0 +1,5 @@
+flask==3.0.3
+gunicorn==22.0.0
+pyhanko==0.25.1
+pyhanko-certvalidator==0.26.3
+cryptography>=42.0.0
