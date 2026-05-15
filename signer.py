@@ -175,35 +175,36 @@ def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2,
 def _montar_background(nome, doc, div_bg, H_bg) -> bytes:
     """
     Monta o stream PDF da coluna esquerda.
-    Calcula fs para que nome + CPF caibam em H_bg sem sobreposição.
+    Nome + CPF ficam no MESMO bloco BT...ET para garantir que o CPF
+    seja sempre renderizado (evita problemas de clipping em leitores PDF).
     """
     linhas = _quebrar_nome(nome)
     n      = len(linhas)
 
-    # fs máximo para que CPF caiba com y_doc >= 1pt:
-    # H_bg = 2 (topo) + n*fs*1.1 + fs*0.35 (descida) + fs_doc + 1.5 (gap) + 1 (base)
-    # onde fs_doc ≈ fs*0.52
-    # fs = (H_bg - 4.5 - 1.0) / (n*1.1 + 0.35 + 0.52)
+    # Calcular fs para que nome (n linhas) + gap + CPF caibam em H_bg
+    # H_bg ≈ 2 + n*fs*1.1 + fs_doc*0.4 (gap) + fs_doc
+    # onde fs_doc = fs*0.52 → H_bg = 2 + fs*(n*1.1 + 0.4*0.52 + 0.52)
+    #                                = 2 + fs*(n*1.1 + 0.728)
     if doc:
-        fs_altura = (H_bg - 5.5) / (n * 1.1 + 0.87)
+        fs_altura  = (H_bg - 2) / (n * 1.1 + 0.728)
     else:
-        fs_altura = (H_bg - 3) / (n * 1.1)
+        fs_altura  = (H_bg - 2) / (n * 1.1)
 
     fs_largura = div_bg / max(len(l) for l in linhas) * 1.55
     fs         = round(min(fs_largura, fs_altura), 2)
     fs_doc     = round(max(fs * 0.52, 5.0), 2)
 
-    # Posições Y
-    y_topo    = H_bg - 2 - fs
-    y_doc_pos = y_topo - (n - 1) * fs * 1.1 - fs * 0.35 - fs_doc - 1.5
+    y_topo = H_bg - 2 - fs
 
+    # Tudo em um único BT block — garante renderização mesmo com clipping externo
     bg  = f'0 0 0 RG 0.4 w {div_bg:.3f} 1 m {div_bg:.3f} {H_bg-1:.3f} l S\n'
     bg += f'BT\n0 0 0 rg\n/F1 {fs:.2f} Tf\n2 {y_topo:.2f} Td\n({_esc(linhas[0])}) Tj\n'
     for l in linhas[1:]:
         bg += f'0 {-fs*1.1:.2f} Td\n({_esc(l)}) Tj\n'
+    if doc:
+        gap = fs_doc * 0.4
+        bg += f'/F1 {fs_doc:.2f} Tf\n0 {-(gap + fs_doc):.2f} Td\n({_esc(doc)}) Tj\n'
     bg += 'ET\n'
-    if doc and y_doc_pos >= 0.5:
-        bg += f'BT\n0 0 0 rg\n/F1 {fs_doc:.2f} Tf\n2 {y_doc_pos:.2f} Td\n({_esc(doc)}) Tj\nET\n'
     return bg.encode('latin-1')
 
 
