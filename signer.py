@@ -256,7 +256,7 @@ def assinar_pdf(
 
     div      = W_f * 0.28
     w_dir    = W_f - div - 3
-    font_dir = 6
+    font_dir = 8
     max_chars = max(1, int(w_dir / (font_dir * 0.6)))
 
     # Coluna direita: 5 linhas
