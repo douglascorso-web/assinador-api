@@ -263,8 +263,8 @@ def assinar_pdf(
     stamp_text = '\n'.join([
         "Documento assinado digitalmente.",
         f"Assinado por {cn}",
-        f"Razao: {razao}",
-        f"Localizacao: {local}",
+        f"Razão: {razao}",
+        f"Localizacão: {local}",
         f"Data: {data_hora}",
     ])
 
