@@ -239,8 +239,8 @@ def assinar_pdf(
     MM     = 2.834645
     x1     = config.get('x1_mm',  8.0) * MM
     y1     = config.get('y1_mm',  5.0) * MM
-    x2     = config.get('x2_mm', 100.0) * MM
-    y2     = config.get('y2_mm', 24.0) * MM
+    x2     = config.get('x2_mm', 120.0) * MM
+    y2     = config.get('y2_mm', 26.0) * MM
     W_f    = x2 - x1
     H_f    = y2 - y1
     razao  = config.get('razao', 'Eu sou o autor deste documento')
@@ -264,7 +264,7 @@ def assinar_pdf(
         "Documento assinado digitalmente.",
         f"Assinado por {cn}",
         f"Razão: {razao}",
-        f"Localizacão: {local}",
+        f"Localização: {local}",
         f"Data: {data_hora}",
     ])
 
