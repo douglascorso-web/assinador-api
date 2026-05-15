@@ -21,7 +21,7 @@ from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko.sign.fields import SigFieldSpec
 from pyhanko.stamp import TextStampStyle
 from pyhanko.pdf_utils.content import RawContent
-from pyhanko.pdf_utils.layout import BoxConstraints, SimpleBoxLayoutRule, AxisAlignment, Margins
+from pyhanko.pdf_utils.layout import BoxConstraints, SimpleBoxLayoutRule, AxisAlignment, Margins, InnerScaling
 from pyhanko.pdf_utils.text import TextBoxStyle
 from pypdf import PdfReader
 
@@ -112,12 +112,14 @@ def carregar_certificado_base64(pfx_bytes: bytes, senha: bytes) -> dict:
 
 
 def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2, W_f, H_f,
-                         stamp_text, inner_layout, font_dir):
+                         stamp_text, inner_layout, font_dir, bg_layout):
     """1a passagem: gera PDF teste e extrai os transforms reais do AP stream."""
     bg_test  = RawContent(data=b"% test", box=BoxConstraints(width=W_f, height=H_f))
     style    = TextStampStyle(
         stamp_text="t\nt\nt\nt\nt",
-        background=bg_test, background_opacity=1.0, border_width=1,
+        background=bg_test, background_opacity=1.0,
+        background_layout=bg_layout,
+        border_width=1,
         inner_content_layout=inner_layout,
         text_box_style=TextBoxStyle(font_size=font_dir),
     )
@@ -246,9 +248,18 @@ def assinar_pdf(
         try: os.unlink(pfx_tmp2.name)
         except: pass
 
+    # Background layout: alinhado à esquerda com margens mínimas
+    # Isso garante que off_x_bg ≈ 1, colocando o nome próximo da borda esquerda
+    bg_layout = SimpleBoxLayoutRule(
+        x_align=AxisAlignment.ALIGN_MIN,
+        y_align=AxisAlignment.ALIGN_MIN,
+        margins=Margins(left=1, right=1, top=1, bottom=1),
+        inner_content_scaling=InnerScaling.SHRINK_TO_FIT,
+    )
+
     tr = _extrair_transforms(
         pdf_bytes, signer2, cn, x1, y1, x2, y2, W_f, H_f,
-        stamp_text, inner_layout, font_dir
+        stamp_text, inner_layout, font_dir, bg_layout
     )
 
     if tr:
@@ -269,6 +280,7 @@ def assinar_pdf(
         timestamp_format='%Y.%m.%d %H:%M:%S UTC',
         background=background,
         background_opacity=1.0,
+        background_layout=bg_layout,
         border_width=1,
         inner_content_layout=inner_layout,
         text_box_style=TextBoxStyle(font_size=font_dir),
