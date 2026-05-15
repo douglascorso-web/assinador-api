@@ -111,7 +111,7 @@ def assinar():
     config.setdefault('x1_mm',   8.0)
     config.setdefault('y1_mm',   5.0)
     config.setdefault('x2_mm',  91.0)
-    config.setdefault('y2_mm',  12.0)
+    config.setdefault('y2_mm',  18.0)
 
     # 4. Assinar
     try:
