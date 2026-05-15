@@ -1,15 +1,9 @@
 """
 Módulo de assinatura PDF — pyhanko, duas colunas, padrão ICP-Brasil.
 
-Layout:
-  ┌─────────────┬──────────────────────────────────────────┐
-  │  NOME       │ Assinado digitalmente por NOME:DOC       │
-  │  SOBRENOME  │ ND: C=BR, O=ICP-Brasil, ...             │
-  │  DOC        │ Razao / Localizacao / Data               │
-  └─────────────┴──────────────────────────────────────────┘
-
-Coluna esquerda → background (RawContent)
-Coluna direita  → TextStampStyle com inner_content_layout (margin_left=div)
+Usa abordagem de 2 passagens para calcular as coordenadas corretas do background:
+1a passagem: gera PDF teste para extrair os transforms reais do AP stream
+2a passagem: gera o PDF final com o background nas coordenadas corretas
 """
 
 import io
@@ -29,6 +23,7 @@ from pyhanko.stamp import TextStampStyle
 from pyhanko.pdf_utils.content import RawContent
 from pyhanko.pdf_utils.layout import BoxConstraints, SimpleBoxLayoutRule, AxisAlignment, Margins
 from pyhanko.pdf_utils.text import TextBoxStyle
+from pypdf import PdfReader
 
 
 def _get_attr(cert, oid):
@@ -73,7 +68,6 @@ def _quebrar_nome(nome: str, max_chars: int = 9) -> list:
 
 
 def _quebrar_texto(texto: str, max_chars: int) -> str:
-    """Quebra texto longo em múltiplas linhas separadas por \\n."""
     if len(texto) <= max_chars:
         return texto
     linhas = []
@@ -117,6 +111,65 @@ def carregar_certificado_base64(pfx_bytes: bytes, senha: bytes) -> dict:
     }
 
 
+def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2, W_f, H_f,
+                         stamp_text, inner_layout, font_dir):
+    """1a passagem: gera PDF teste e extrai os transforms reais do AP stream."""
+    bg_test  = RawContent(data=b"% test", box=BoxConstraints(width=W_f, height=H_f))
+    style    = TextStampStyle(
+        stamp_text="t\nt\nt\nt\nt",
+        background=bg_test, background_opacity=1.0, border_width=1,
+        inner_content_layout=inner_layout,
+        text_box_style=TextBoxStyle(font_size=font_dir),
+    )
+    meta = PdfSignatureMetadata(field_name='Sig_Test', reason='t', location='t', name=cn)
+    spec = SigFieldSpec(sig_field_name='Sig_Test', on_page=0, box=(x1, y1, x2, y2))
+    ps   = PdfSigner(meta, signer, stamp_style=style, new_field_spec=spec)
+    out  = io.BytesIO()
+    ps.sign_pdf(IncrementalPdfFileWriter(io.BytesIO(pdf_bytes)), output=out)
+    out.seek(0)
+
+    r = PdfReader(out)
+    for field_ref in r.trailer['/Root']['/AcroForm']['/Fields']:
+        fobj = field_ref.get_object()
+        if '/AP' not in fobj:
+            continue
+        for _, v in fobj['/AP'].items():
+            ap   = v.get_object()
+            data = ap.get_data().decode('latin-1')
+            if 'BackgroundGS' not in data:
+                continue
+            m_bg = re.search(
+                r'/BackgroundGS gs ([\d.]+) 0 0 [\d.]+ ([\d.]+) ([\d.]+) cm', data)
+            m_tx = re.search(
+                r'q ([\d.]+) 0 0 [\d.]+ ([\d.]+) ([\d.]+) cm.*?/Tx BMC', data, re.DOTALL)
+            if m_bg and m_tx:
+                return {
+                    'scale_bg': float(m_bg.group(1)),
+                    'off_x_bg': float(m_bg.group(2)),
+                    'off_y_bg': float(m_bg.group(3)),
+                    'off_x_tx': float(m_tx.group(2)),
+                }
+    return None
+
+
+def _montar_background(nome, doc, div_bg, H_bg) -> bytes:
+    """Monta o stream PDF da coluna esquerda nas coordenadas do background."""
+    linhas = _quebrar_nome(nome)
+    n      = len(linhas)
+    fs     = round(min(div_bg / max(len(l) for l in linhas) * 1.55, H_bg / n * 0.82), 2)
+    fs_doc = round(max(fs * 0.52, 5.0), 2)
+
+    bg  = f'0 0 0 RG 0.4 w {div_bg:.3f} 1 m {div_bg:.3f} {H_bg-1:.3f} l S\n'
+    bg += f'BT\n0 0 0 rg\n/F1 {fs:.2f} Tf\n2 {H_bg - fs*1.1:.2f} Td\n({_esc(linhas[0])}) Tj\n'
+    for l in linhas[1:]:
+        bg += f'0 {-fs*1.1:.2f} Td\n({_esc(l)}) Tj\n'
+    bg += 'ET\n'
+    if doc:
+        y_doc = max(H_bg - fs*1.1 - n * fs*1.1, 1.5)
+        bg += f'BT\n0 0 0 rg\n/F1 {fs_doc:.2f} Tf\n2 {y_doc:.2f} Td\n({_esc(doc)}) Tj\nET\n'
+    return bg.encode('latin-1')
+
+
 def assinar_pdf(
     pdf_bytes: bytes,
     pfx_bytes: bytes,
@@ -145,7 +198,6 @@ def assinar_pdf(
     else:
         nome, doc = cn, ''
 
-    # Dimensões do campo
     MM     = 2.834645
     x1     = config.get('x1_mm',  8.0) * MM
     y1     = config.get('y1_mm',  5.0) * MM
@@ -164,51 +216,53 @@ def assinar_pdf(
 
     data_hora = datetime.now(timezone.utc).strftime('%Y.%m.%d %H:%M:%S UTC')
 
-    # Layout
-    div   = W_f * 0.28
-    w_dir = W_f - div - 3
-
-    # Coluna esquerda: nome quebrado
-    linhas_esq = _quebrar_nome(nome)
-    n_esq      = len(linhas_esq)
-    fs_esq     = round(min(div / max(len(l) for l in linhas_esq) * 1.55, H_f / n_esq * 0.82), 2)
-    fs_doc     = round(max(fs_esq * 0.52, 5.0), 2)
-
-    # Background: coluna esquerda
-    bg  = f'0 0 0 RG 0.4 w {div:.3f} 1 m {div:.3f} {H_f-1:.3f} l S\n'
-    bg += f'BT\n0 0 0 rg\n/F1 {fs_esq:.2f} Tf\n2 {H_f - fs_esq*1.1:.2f} Td\n({_esc(linhas_esq[0])}) Tj\n'
-    for l in linhas_esq[1:]:
-        bg += f'0 {-fs_esq*1.1:.2f} Td\n({_esc(l)}) Tj\n'
-    bg += 'ET\n'
-    if doc:
-        y_doc = max(H_f - fs_esq*1.1 - n_esq * fs_esq*1.1, 1.5)
-        bg += f'BT\n0 0 0 rg\n/F1 {fs_doc:.2f} Tf\n2 {y_doc:.2f} Td\n({_esc(doc)}) Tj\nET\n'
-
-    background = RawContent(
-        data=bg.encode('latin-1'),
-        box=BoxConstraints(width=W_f, height=H_f),
-    )
-
-    # Coluna direita: stamp_text com quebra automática
-    # font_size=6 → char_width Courier ≈ 3.6pt → max_chars = w_dir/3.6
-    font_dir   = 6
-    max_chars  = max(1, int(w_dir / (font_dir * 0.6)))
-    nd_curto   = re.sub(r', OU=[^,]+', '', nd)  # remover OU= se muito longo
+    div      = W_f * 0.28
+    w_dir    = W_f - div - 3
+    font_dir = 6
+    max_chars = max(1, int(w_dir / (font_dir * 0.6)))
 
     stamp_text = '\n'.join([
         _quebrar_texto(f"Assinado digitalmente por {cn}", max_chars),
-        _quebrar_texto(f"ND: {nd_curto}", max_chars),
+        _quebrar_texto(f"ND: {nd}", max_chars),
         f"Razao: {razao}",
         f"Localizacao: {local}",
         f"Data: {data_hora}",
     ])
 
-    # inner_content_layout: empurra o text box para após a divisória
     inner_layout = SimpleBoxLayoutRule(
         x_align=AxisAlignment.ALIGN_MIN,
         y_align=AxisAlignment.ALIGN_MAX,
         margins=Margins(left=int(div) + 2, right=1, top=1, bottom=1),
     )
+
+    # ── 1a passagem: descobrir transforms reais ───────────────────────────────
+    # Recarregar signer (cada uso consome o objeto)
+    pfx_tmp2 = tempfile.NamedTemporaryFile(suffix='.pfx', delete=False)
+    pfx_tmp2.write(pfx_bytes)
+    pfx_tmp2.close()
+    try:
+        signer2 = SimpleSigner.load_pkcs12(pfx_tmp2.name, passphrase=pfx_senha)
+    finally:
+        try: os.unlink(pfx_tmp2.name)
+        except: pass
+
+    tr = _extrair_transforms(
+        pdf_bytes, signer2, cn, x1, y1, x2, y2, W_f, H_f,
+        stamp_text, inner_layout, font_dir
+    )
+
+    if tr:
+        # Calcular coordenadas no espaço do background
+        div_bg = (tr['off_x_tx'] - tr['off_x_bg']) / tr['scale_bg']
+        H_bg   = (H_f - tr['off_y_bg']) / tr['scale_bg']
+    else:
+        # Fallback: usar coordenadas aproximadas
+        div_bg = div * 0.8
+        H_bg   = H_f * 1.1
+
+    # ── 2a passagem: gerar o PDF final com background correto ─────────────────
+    bg_data    = _montar_background(nome, doc, div_bg, H_bg)
+    background = RawContent(data=bg_data, box=BoxConstraints(width=W_f, height=H_f))
 
     style = TextStampStyle(
         stamp_text=stamp_text,
@@ -219,7 +273,6 @@ def assinar_pdf(
         inner_content_layout=inner_layout,
         text_box_style=TextBoxStyle(font_size=font_dir),
     )
-
     sig_field = SigFieldSpec(
         sig_field_name='Assinatura_Digital',
         on_page=pagina_idx,
@@ -231,8 +284,18 @@ def assinar_pdf(
         location=local,
         name=cn,
     )
-    pdf_signer = PdfSigner(sig_meta, signer, stamp_style=style, new_field_spec=sig_field)
 
+    # Recarregar signer para a 2a passagem
+    pfx_tmp3 = tempfile.NamedTemporaryFile(suffix='.pfx', delete=False)
+    pfx_tmp3.write(pfx_bytes)
+    pfx_tmp3.close()
+    try:
+        signer3 = SimpleSigner.load_pkcs12(pfx_tmp3.name, passphrase=pfx_senha)
+    finally:
+        try: os.unlink(pfx_tmp3.name)
+        except: pass
+
+    pdf_signer = PdfSigner(sig_meta, signer3, stamp_style=style, new_field_spec=sig_field)
     pdf_in  = io.BytesIO(pdf_bytes)
     pdf_out = io.BytesIO()
     pdf_signer.sign_pdf(IncrementalPdfFileWriter(pdf_in), output=pdf_out)
