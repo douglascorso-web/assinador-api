@@ -1,9 +1,15 @@
 """
 Módulo de assinatura PDF — pyhanko, duas colunas, padrão ICP-Brasil.
 
-Usa abordagem de 2 passagens para calcular as coordenadas corretas do background:
-1a passagem: gera PDF teste para extrair os transforms reais do AP stream
-2a passagem: gera o PDF final com o background nas coordenadas corretas
+Layout:
+  ┌─────────────┬──────────────────────────────────────────┐
+  │  NOME       │ Assinado digitalmente por NOME:DOC       │
+  │  SOBRENOME  │ ND: C=BR, O=ICP-Brasil, ...             │
+  │  DOC        │ Razao / Localizacao / Data               │
+  └─────────────┴──────────────────────────────────────────┘
+
+Coluna esquerda → background (RawContent) com layout calibrado via 2 passagens
+Coluna direita  → TextStampStyle com inner_content_layout
 """
 
 import io
@@ -21,7 +27,9 @@ from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko.sign.fields import SigFieldSpec
 from pyhanko.stamp import TextStampStyle
 from pyhanko.pdf_utils.content import RawContent
-from pyhanko.pdf_utils.layout import BoxConstraints, SimpleBoxLayoutRule, AxisAlignment, Margins, InnerScaling
+from pyhanko.pdf_utils.layout import (
+    BoxConstraints, SimpleBoxLayoutRule, AxisAlignment, Margins, InnerScaling
+)
 from pyhanko.pdf_utils.text import TextBoxStyle
 from pypdf import PdfReader
 
@@ -111,14 +119,24 @@ def carregar_certificado_base64(pfx_bytes: bytes, senha: bytes) -> dict:
     }
 
 
-def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2, W_f, H_f,
-                         stamp_text, inner_layout, font_dir, bg_layout):
-    """1a passagem: gera PDF teste e extrai os transforms reais do AP stream."""
-    bg_test  = RawContent(data=b"% test", box=BoxConstraints(width=W_f, height=H_f))
-    style    = TextStampStyle(
+def _bg_layout():
+    """Background alinhado à esquerda/base com margens mínimas."""
+    return SimpleBoxLayoutRule(
+        x_align=AxisAlignment.ALIGN_MIN,
+        y_align=AxisAlignment.ALIGN_MIN,
+        margins=Margins(left=1, right=1, top=1, bottom=1),
+        inner_content_scaling=InnerScaling.SHRINK_TO_FIT,
+    )
+
+
+def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2,
+                         W_f, H_f, stamp_text, inner_layout, font_dir):
+    """1a passagem: extrai os transforms reais do AP stream."""
+    bg_test = RawContent(data=b"% test", box=BoxConstraints(width=W_f, height=H_f))
+    style   = TextStampStyle(
         stamp_text="t\nt\nt\nt\nt",
         background=bg_test, background_opacity=1.0,
-        background_layout=bg_layout,
+        background_layout=_bg_layout(),
         border_width=1,
         inner_content_layout=inner_layout,
         text_box_style=TextBoxStyle(font_size=font_dir),
@@ -155,20 +173,37 @@ def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2, W_f, H_f,
 
 
 def _montar_background(nome, doc, div_bg, H_bg) -> bytes:
-    """Monta o stream PDF da coluna esquerda nas coordenadas do background."""
+    """
+    Monta o stream PDF da coluna esquerda.
+    Calcula fs para que nome + CPF caibam em H_bg sem sobreposição.
+    """
     linhas = _quebrar_nome(nome)
     n      = len(linhas)
-    fs     = round(min(div_bg / max(len(l) for l in linhas) * 1.55, H_bg / n * 0.82), 2)
-    fs_doc = round(max(fs * 0.52, 5.0), 2)
+
+    # fs máximo para que CPF caiba com y_doc >= 1pt:
+    # H_bg = 2 (topo) + n*fs*1.1 + fs*0.35 (descida) + fs_doc + 1.5 (gap) + 1 (base)
+    # onde fs_doc ≈ fs*0.52
+    # fs = (H_bg - 4.5 - 1.0) / (n*1.1 + 0.35 + 0.52)
+    if doc:
+        fs_altura = (H_bg - 5.5) / (n * 1.1 + 0.87)
+    else:
+        fs_altura = (H_bg - 3) / (n * 1.1)
+
+    fs_largura = div_bg / max(len(l) for l in linhas) * 1.55
+    fs         = round(min(fs_largura, fs_altura), 2)
+    fs_doc     = round(max(fs * 0.52, 5.0), 2)
+
+    # Posições Y
+    y_topo    = H_bg - 2 - fs
+    y_doc_pos = y_topo - (n - 1) * fs * 1.1 - fs * 0.35 - fs_doc - 1.5
 
     bg  = f'0 0 0 RG 0.4 w {div_bg:.3f} 1 m {div_bg:.3f} {H_bg-1:.3f} l S\n'
-    bg += f'BT\n0 0 0 rg\n/F1 {fs:.2f} Tf\n2 {H_bg - fs*1.1:.2f} Td\n({_esc(linhas[0])}) Tj\n'
+    bg += f'BT\n0 0 0 rg\n/F1 {fs:.2f} Tf\n2 {y_topo:.2f} Td\n({_esc(linhas[0])}) Tj\n'
     for l in linhas[1:]:
         bg += f'0 {-fs*1.1:.2f} Td\n({_esc(l)}) Tj\n'
     bg += 'ET\n'
-    if doc:
-        y_doc = max(H_bg - fs*1.1 - n * fs*1.1, 1.5)
-        bg += f'BT\n0 0 0 rg\n/F1 {fs_doc:.2f} Tf\n2 {y_doc:.2f} Td\n({_esc(doc)}) Tj\nET\n'
+    if doc and y_doc_pos >= 0.5:
+        bg += f'BT\n0 0 0 rg\n/F1 {fs_doc:.2f} Tf\n2 {y_doc_pos:.2f} Td\n({_esc(doc)}) Tj\nET\n'
     return bg.encode('latin-1')
 
 
@@ -178,7 +213,7 @@ def assinar_pdf(
     pfx_senha: bytes,
     config:    dict,
 ) -> bytes:
-    # Carregar signer
+    # Carregar certificado
     pfx_tmp = tempfile.NamedTemporaryFile(suffix='.pfx', delete=False)
     pfx_tmp.write(pfx_bytes)
     pfx_tmp.close()
@@ -204,7 +239,7 @@ def assinar_pdf(
     x1     = config.get('x1_mm',  8.0) * MM
     y1     = config.get('y1_mm',  5.0) * MM
     x2     = config.get('x2_mm', 91.0) * MM
-    y2     = config.get('y2_mm', 20.0) * MM
+    y2     = config.get('y2_mm', 22.0) * MM
     W_f    = x2 - x1
     H_f    = y2 - y1
     razao  = config.get('razao', 'Eu sou o autor deste documento')
@@ -238,7 +273,6 @@ def assinar_pdf(
     )
 
     # ── 1a passagem: descobrir transforms reais ───────────────────────────────
-    # Recarregar signer (cada uso consome o objeto)
     pfx_tmp2 = tempfile.NamedTemporaryFile(suffix='.pfx', delete=False)
     pfx_tmp2.write(pfx_bytes)
     pfx_tmp2.close()
@@ -248,30 +282,19 @@ def assinar_pdf(
         try: os.unlink(pfx_tmp2.name)
         except: pass
 
-    # Background layout: alinhado à esquerda com margens mínimas
-    # Isso garante que off_x_bg ≈ 1, colocando o nome próximo da borda esquerda
-    bg_layout = SimpleBoxLayoutRule(
-        x_align=AxisAlignment.ALIGN_MIN,
-        y_align=AxisAlignment.ALIGN_MIN,
-        margins=Margins(left=1, right=1, top=1, bottom=1),
-        inner_content_scaling=InnerScaling.SHRINK_TO_FIT,
-    )
-
     tr = _extrair_transforms(
-        pdf_bytes, signer2, cn, x1, y1, x2, y2, W_f, H_f,
-        stamp_text, inner_layout, font_dir, bg_layout
+        pdf_bytes, signer2, cn, x1, y1, x2, y2,
+        W_f, H_f, stamp_text, inner_layout, font_dir
     )
 
     if tr:
-        # Calcular coordenadas no espaço do background
         div_bg = (tr['off_x_tx'] - tr['off_x_bg']) / tr['scale_bg']
         H_bg   = (H_f - tr['off_y_bg']) / tr['scale_bg']
     else:
-        # Fallback: usar coordenadas aproximadas
         div_bg = div * 0.8
         H_bg   = H_f * 1.1
 
-    # ── 2a passagem: gerar o PDF final com background correto ─────────────────
+    # ── 2a passagem: gerar PDF final ─────────────────────────────────────────
     bg_data    = _montar_background(nome, doc, div_bg, H_bg)
     background = RawContent(data=bg_data, box=BoxConstraints(width=W_f, height=H_f))
 
@@ -280,7 +303,7 @@ def assinar_pdf(
         timestamp_format='%Y.%m.%d %H:%M:%S UTC',
         background=background,
         background_opacity=1.0,
-        background_layout=bg_layout,
+        background_layout=_bg_layout(),
         border_width=1,
         inner_content_layout=inner_layout,
         text_box_style=TextBoxStyle(font_size=font_dir),
@@ -297,7 +320,6 @@ def assinar_pdf(
         name=cn,
     )
 
-    # Recarregar signer para a 2a passagem
     pfx_tmp3 = tempfile.NamedTemporaryFile(suffix='.pfx', delete=False)
     pfx_tmp3.write(pfx_bytes)
     pfx_tmp3.close()
