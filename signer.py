@@ -258,9 +258,10 @@ def assinar_pdf(
     font_dir = 6
     max_chars = max(1, int(w_dir / (font_dir * 0.6)))
 
+    # Texto da coluna direita — 5 linhas para melhor escala (~0.95)
     stamp_text = '\n'.join([
-        _quebrar_texto(f"Assinado digitalmente por {cn}", max_chars),
-        _quebrar_texto(f"ND: {nd}", max_chars),
+        f"Assinado por {cn}",
+        f"CN={cn}",
         f"Razao: {razao}",
         f"Localizacao: {local}",
         f"Data: {data_hora}",
