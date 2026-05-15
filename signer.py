@@ -186,13 +186,13 @@ def _montar_background(nome, doc, div_bg, H_bg) -> bytes:
     # onde fs_doc = fs*0.52 → H_bg = 2 + fs*(n*1.1 + 0.4*0.52 + 0.52)
     #                                = 2 + fs*(n*1.1 + 0.728)
     if doc:
-        fs_altura  = (H_bg - 2) / (n * 1.1 + 0.728)
+        fs_altura  = (H_bg - 2) / (n * 1.1 + 1.5)  # +1.5 para reduzir fs_nome ~2pt
     else:
         fs_altura  = (H_bg - 2) / (n * 1.1)
 
-    fs_largura = div_bg / max(len(l) for l in linhas) * 1.55
+    fs_largura = div_bg / max(len(l) for l in linhas) * 1.32  # reduzido para fonte menor do nome
     fs         = round(min(fs_largura, fs_altura), 2)
-    fs_doc     = round(max(fs * 0.52, 5.0), 2)
+    fs_doc     = round(max(fs * 0.82, 6.0), 2)  # maior proporção para harmonia
 
     y_topo = H_bg - 2 - fs
 
@@ -202,7 +202,7 @@ def _montar_background(nome, doc, div_bg, H_bg) -> bytes:
     for l in linhas[1:]:
         bg += f'0 {-fs*1.1:.2f} Td\n({_esc(l)}) Tj\n'
     if doc:
-        gap = fs_doc * 0.4
+        gap = 2.0  # gap fixo de 2pt entre nome e CPF
         bg += f'/F1 {fs_doc:.2f} Tf\n0 {-(gap + fs_doc):.2f} Td\n({_esc(doc)}) Tj\n'
     bg += 'ET\n'
     return bg.encode('latin-1')
