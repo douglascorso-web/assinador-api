@@ -239,7 +239,7 @@ def assinar_pdf(
     MM     = 2.834645
     x1     = config.get('x1_mm',  8.0) * MM
     y1     = config.get('y1_mm',  5.0) * MM
-    x2     = config.get('x2_mm', 91.0) * MM
+    x2     = config.get('x2_mm', 100.0) * MM
     y2     = config.get('y2_mm', 24.0) * MM
     W_f    = x2 - x1
     H_f    = y2 - y1
@@ -259,28 +259,14 @@ def assinar_pdf(
     font_dir = 6
     max_chars = max(1, int(w_dir / (font_dir * 0.6)))
 
-    # Texto da coluna direita — quebrar "Assinado por" antes do CPF
-    # para reduzir a linha mais longa de 48 para 38 chars → scale ~1.0 → texto ~6pt
-    if ':' in cn:
-        nome_parte, doc_parte = cn.split(':', 1)
-        nome_parte = nome_parte.strip()
-        doc_parte  = doc_parte.strip()
-        linha_assinado = f"Assinado por {nome_parte}"
-        linha_doc      = f":{doc_parte}"
-    else:
-        linha_assinado = f"Assinado por {cn}"
-        linha_doc      = ""
-
-    # 5 linhas sem CN= redundante → max 37 chars → scale ~1.0 → texto ~6pt
-    linhas_direita = [linha_assinado]
-    if linha_doc:
-        linhas_direita.append(linha_doc)
-    linhas_direita += [
+    # Coluna direita: 4 linhas, linha mais longa ~48 chars
+    # x2_mm=100 dá w_dir=190pt → cabe tudo em linha única com scale=1.0
+    stamp_text = '\n'.join([
+        f"Assinado por {cn}",
         f"Razao: {razao}",
         f"Localizacao: {local}",
         f"Data: {data_hora}",
-    ]
-    stamp_text = '\n'.join(linhas_direita)
+    ])
 
     inner_layout = SimpleBoxLayoutRule(
         x_align=AxisAlignment.ALIGN_MIN,
