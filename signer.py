@@ -259,9 +259,9 @@ def assinar_pdf(
     font_dir = 6
     max_chars = max(1, int(w_dir / (font_dir * 0.6)))
 
-    # Coluna direita: 4 linhas, linha mais longa ~48 chars
-    # x2_mm=100 dá w_dir=190pt → cabe tudo em linha única com scale=1.0
+    # Coluna direita: 5 linhas
     stamp_text = '\n'.join([
+        "Documento assinado digitalmente.",
         f"Assinado por {cn}",
         f"Razao: {razao}",
         f"Localizacao: {local}",
