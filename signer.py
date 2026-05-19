@@ -252,20 +252,29 @@ def assinar_pdf(
         n_paginas = int(reader.root['/Pages'].get_object()['/Count'])
     pagina_idx = max(0, n_paginas + pagina) if pagina < 0 else min(pagina, n_paginas - 1)
 
-    data_hora = datetime.now(timezone.utc).strftime('%Y.%m.%d %H:%M:%S UTC')
+    # Data/hora no fuso horário de Brasília (UTC-3)
+    from datetime import timedelta
+    agora_br = datetime.now(timezone.utc) - timedelta(hours=3)
+    data_hora = agora_br.strftime('%d/%m/%Y - %H:%M')
 
     div      = W_f * 0.28
     w_dir    = W_f - div - 3
     font_dir = 8
     max_chars = max(1, int(w_dir / (font_dir * 0.6)))
 
-    # Coluna direita: 5 linhas
+    # Coluna direita: 3 linhas no padrão solicitado
+    if ':' in cn:
+        nome_parte, doc_parte = cn.split(':', 1)
+        nome_parte = nome_parte.strip()
+        doc_parte  = doc_parte.strip()
+        linha_nome = f"{nome_parte} - CPF: {doc_parte}"
+    else:
+        linha_nome = cn
+
     stamp_text = '\n'.join([
-        "Documento assinado digitalmente.",
-        f"Assinado por {cn}",
-        f"Razao: {razao}",
-        f"Localizacao: {local}",
-        f"Data: {data_hora}",
+        "Assinado digitalmente por:",
+        linha_nome,
+        data_hora,
     ])
 
     inner_layout = SimpleBoxLayoutRule(
