@@ -145,7 +145,7 @@ def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2,
     spec = SigFieldSpec(sig_field_name='Sig_Test', on_page=0, box=(x1, y1, x2, y2))
     ps   = PdfSigner(meta, signer, stamp_style=style, new_field_spec=spec)
     out  = io.BytesIO()
-    ps.sign_pdf(IncrementalPdfFileWriter(io.BytesIO(pdf_bytes)), output=out)
+    ps.sign_pdf(IncrementalPdfFileWriter(io.BytesIO(pdf_bytes), strict=False), output=out)
     out.seek(0)
 
     r = PdfReader(out)
@@ -263,8 +263,8 @@ def assinar_pdf(
     stamp_text = '\n'.join([
         "Documento assinado digitalmente.",
         f"Assinado por {cn}",
-        f"Razão: {razao}",
-        f"Localização: {local}",
+        f"Razao: {razao}",
+        f"Localizacao: {local}",
         f"Data: {data_hora}",
     ])
 
@@ -334,7 +334,7 @@ def assinar_pdf(
     pdf_signer = PdfSigner(sig_meta, signer3, stamp_style=style, new_field_spec=sig_field)
     pdf_in  = io.BytesIO(pdf_bytes)
     pdf_out = io.BytesIO()
-    pdf_signer.sign_pdf(IncrementalPdfFileWriter(pdf_in), output=pdf_out)
+    pdf_signer.sign_pdf(IncrementalPdfFileWriter(pdf_in, strict=False), output=pdf_out)
 
     pdf_out.seek(0)
     resultado = pdf_out.read()
