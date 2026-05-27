@@ -245,12 +245,18 @@ def assinar_pdf(
     H_f    = y2 - y1
     razao  = config.get('razao', 'Eu sou o autor deste documento')
     local  = config.get('local', 'Brasil')
-    pagina = int(config.get('pagina', -1))
+    pagina_cfg = config.get('pagina', -1)  # int ou 'all'
 
     with io.BytesIO(pdf_bytes) as fbuf:
         reader    = PdfFileReader(fbuf)
         n_paginas = int(reader.root['/Pages'].get_object()['/Count'])
-    pagina_idx = max(0, n_paginas + pagina) if pagina < 0 else min(pagina, n_paginas - 1)
+
+    if pagina_cfg == 'all':
+        paginas_idx = list(range(n_paginas))  # todas as páginas
+    else:
+        pagina = int(pagina_cfg)
+        idx = max(0, n_paginas + pagina) if pagina < 0 else min(pagina, n_paginas - 1)
+        paginas_idx = [idx]
 
     # Data/hora no fuso horário de Brasília (UTC-3)
     from datetime import timedelta
@@ -319,34 +325,43 @@ def assinar_pdf(
         inner_content_layout=inner_layout,
         text_box_style=TextBoxStyle(font_size=font_dir),
     )
-    sig_field = SigFieldSpec(
-        sig_field_name='Assinatura_Digital',
-        on_page=pagina_idx,
-        box=(x1, y1, x2, y2),
-    )
-    sig_meta = PdfSignatureMetadata(
-        field_name='Assinatura_Digital',
-        reason=razao,
-        location=local,
-        name=cn,
-    )
+    # Assinar uma ou todas as páginas
+    # Cada assinatura é incremental sobre o resultado da anterior
+    pdf_atual = pdf_bytes
 
-    pfx_tmp3 = tempfile.NamedTemporaryFile(suffix='.pfx', delete=False)
-    pfx_tmp3.write(pfx_bytes)
-    pfx_tmp3.close()
-    try:
-        signer3 = SimpleSigner.load_pkcs12(pfx_tmp3.name, passphrase=pfx_senha)
-    finally:
-        try: os.unlink(pfx_tmp3.name)
-        except: pass
+    for i, pagina_idx in enumerate(paginas_idx):
+        sig_name = f'Assinatura_Digital_{pagina_idx}' if len(paginas_idx) > 1 else 'Assinatura_Digital'
 
-    pdf_signer = PdfSigner(sig_meta, signer3, stamp_style=style, new_field_spec=sig_field)
-    pdf_in  = io.BytesIO(pdf_bytes)
-    pdf_out = io.BytesIO()
-    pdf_signer.sign_pdf(IncrementalPdfFileWriter(pdf_in, strict=False), output=pdf_out)
+        sig_field = SigFieldSpec(
+            sig_field_name=sig_name,
+            on_page=pagina_idx,
+            box=(x1, y1, x2, y2),
+        )
+        sig_meta = PdfSignatureMetadata(
+            field_name=sig_name,
+            reason=razao,
+            location=local,
+            name=cn,
+        )
 
-    pdf_out.seek(0)
-    resultado = pdf_out.read()
+        pfx_tmp3 = tempfile.NamedTemporaryFile(suffix='.pfx', delete=False)
+        pfx_tmp3.write(pfx_bytes)
+        pfx_tmp3.close()
+        try:
+            signer3 = SimpleSigner.load_pkcs12(pfx_tmp3.name, passphrase=pfx_senha)
+        finally:
+            try: os.unlink(pfx_tmp3.name)
+            except: pass
+
+        pdf_signer = PdfSigner(sig_meta, signer3, stamp_style=style, new_field_spec=sig_field)
+        pdf_in  = io.BytesIO(pdf_atual)
+        pdf_out = io.BytesIO()
+        pdf_signer.sign_pdf(IncrementalPdfFileWriter(pdf_in, strict=False), output=pdf_out)
+
+        pdf_out.seek(0)
+        pdf_atual = pdf_out.read()
+
+    resultado = pdf_atual
 
     if resultado[:4] != b'%PDF':
         raise RuntimeError('Resultado da assinatura não é um PDF válido.')
