@@ -129,7 +129,7 @@ def _bg_layout():
     )
 
 
-def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2,
+def _extrair_transforms(pdf_bytes, signer, cn, x1, y1_ref, x2, y2_ref,
                          W_f, H_f, stamp_text, inner_layout, font_dir):
     """1a passagem: extrai os transforms reais do AP stream."""
     bg_test = RawContent(data=b"% test", box=BoxConstraints(width=W_f, height=H_f))
@@ -142,7 +142,7 @@ def _extrair_transforms(pdf_bytes, signer, cn, x1, y1, x2, y2,
         text_box_style=TextBoxStyle(font_size=font_dir),
     )
     meta = PdfSignatureMetadata(field_name='Sig_Test', reason='t', location='t', name=cn)
-    spec = SigFieldSpec(sig_field_name='Sig_Test', on_page=0, box=(x1, y1, x2, y2))
+    spec = SigFieldSpec(sig_field_name='Sig_Test', on_page=0, box=(x1, y1_ref, x2, y2_ref))
     ps   = PdfSigner(meta, signer, stamp_style=style, new_field_spec=spec)
     out  = io.BytesIO()
     ps.sign_pdf(IncrementalPdfFileWriter(io.BytesIO(pdf_bytes), strict=False), output=out)
@@ -238,11 +238,11 @@ def assinar_pdf(
 
     MM     = 2.834645
     x1     = config.get('x1_mm',  8.0) * MM
-    y1     = config.get('y1_mm',  5.0) * MM
+    y1_last  = config.get('y1_mm',  5.0) * MM    # Y da última página
+    y1_other = config.get('y1_mm_outras', config.get('y1_mm', 5.0)) * MM  # Y das demais
     x2     = config.get('x2_mm', 120.0) * MM
-    y2     = config.get('y2_mm', 26.0) * MM
-    W_f    = x2 - x1
-    H_f    = y2 - y1
+    y2_last  = config.get('y2_mm',  26.0) * MM
+    y2_other = config.get('y2_mm_outras', config.get('y2_mm', 26.0)) * MM
     razao  = config.get('razao', 'Eu sou o autor deste documento')
     local  = config.get('local', 'Brasil')
     pagina_cfg = config.get('pagina', -1)  # int ou 'all'
@@ -257,12 +257,17 @@ def assinar_pdf(
         pagina = int(pagina_cfg)
         idx = max(0, n_paginas + pagina) if pagina < 0 else min(pagina, n_paginas - 1)
         paginas_idx = [idx]
+    
+    ultima_pagina_idx = n_paginas - 1
 
     # Data/hora no fuso horário de Brasília (UTC-3)
     from datetime import timedelta
     agora_br = datetime.now(timezone.utc) - timedelta(hours=3)
     data_hora = agora_br.strftime('%d/%m/%Y - %H:%M')
 
+    # Para o cálculo do estilo visual, usar dimensões da última página como referência
+    W_f = x2 - x1
+    H_f = y2_last - y1_last
     div      = W_f * 0.28
     w_dir    = W_f - div - 3
     font_dir = 8
@@ -300,7 +305,7 @@ def assinar_pdf(
         except: pass
 
     tr = _extrair_transforms(
-        pdf_bytes, signer2, cn, x1, y1, x2, y2,
+        pdf_bytes, signer2, cn, x1, y1_last, x2, y2_last,
         W_f, H_f, stamp_text, inner_layout, font_dir
     )
 
@@ -331,6 +336,13 @@ def assinar_pdf(
 
     for i, pagina_idx in enumerate(paginas_idx):
         sig_name = f'Assinatura_Digital_{pagina_idx}' if len(paginas_idx) > 1 else 'Assinatura_Digital'
+
+        # Usar Y diferente para última página vs páginas intermediárias
+        is_ultima = (pagina_idx == ultima_pagina_idx)
+        y1  = y1_last  if is_ultima else y1_other
+        y2  = y2_last  if is_ultima else y2_other
+        W_f = x2 - x1
+        H_f = y2 - y1
 
         sig_field = SigFieldSpec(
             sig_field_name=sig_name,
